@@ -1,1 +1,159 @@
+import os
+import sys
+import numpy as np
+import cv2
+from PIL import Image
+!pip install pytesseract
+!pip install openai
+!pip install streamlit
+import pytesseract
+import streamlit as st
+import openai
 
+# ==========================================
+# 1. SYSTEM CONSTRAINTS & INITIALIZATION
+# ==========================================
+
+# Configuration for Tesseract pathing (Crucial for Windows environments)
+if sys.platform.startswith("win"):
+    # Common default installation paths for Windows
+    possible_paths = [
+        r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+        r"C:\Users\AppData\Local\Tesseract-OCR\tesseract.exe"
+    ]
+    for path in possible_paths:
+        if os.path.exists(path):
+            pytesseract.pytesseract.tesseract_cmd = path
+            break
+
+# UI Setup
+st.set_page_config(
+    page_title="MechGPT | ANSYS Error Resolver",
+    page_icon="🔧",
+    layout="centered"
+)
+
+# Custom CSS for clean UI styling
+st.markdown("""
+    <style>
+    .reportview-container { background: #f5f7f9; }
+    .stCodeBlock { border-left: 4px solid #ff4b4b; }
+    .success-box { padding: 15px; border-radius: 5px; background-color: #e3f2fd; border-left: 5px solid #2196f3; }
+    </style>
+""", unsafe_allow_html=True)
+
+# Hardcoded documentation matrix for targeted help links
+DOCS_DB = {
+    "pivot": "https://ansyshelp.ansys.com/account/secured?returnurl=/Views/Secured/v241/en/wb_sim/ds_sol_piv_warn.html",
+    "license": "https://ansyshelp.ansys.com/account/secured?returnurl=/Views/Secured/v241/en/ans_lic/lic_err_codes.html",
+    "contact": "https://ansyshelp.ansys.com/account/secured?returnurl=/Views/Secured/v241/en/wb_sim/ds_contact_status.html",
+    "mesh": "https://ansyshelp.ansys.com/account/secured?returnurl=/Views/Secured/v241/en/wb_msh/msh_troubleshooting.html",
+    "converge": "https://ansyshelp.ansys.com/account/secured?returnurl=/Views/Secured/v241/en/wb_sim/ds_nonlinear_diagnostics.html"
+}
+
+# ==========================================
+# 2. CORE UTILITY FUNCTIONS
+# ==========================================
+
+def preprocess_image(image: Image.Image) -> np.ndarray:
+    """Converts PIL Image to a high-contrast grayscale CV2 array for optimal OCR."""
+    img_array = np.array(image.convert("RGB"))
+    gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+    # Thresholding to isolate text cleanly from mechanical simulation background noise
+    processed_img = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)[1]
+    return processed_img
+
+def extract_text_from_image(processed_img: np.ndarray) -> str:
+    """Runs Tesseract OCR over the processed image array."""
+    try:
+        text = pytesseract.image_to_string(processed_img)
+        return text.strip()
+    except Exception as e:
+        st.error("🚨 Tesseract Binary not detected or misconfigured on host machine.")
+        st.info("Ensure `tesseract` package is installed on your OS system paths.")
+        return ""
+
+def get_documentation_link(error_text: str) -> str:
+    """Scans text against our mapping to return relevant documentation."""
+    lowered = error_text.lower()
+    for keyword, link in DOCS_DB.items():
+        if keyword in lowered:
+            return link
+    return "https://ansyshelp.ansys.com/" # Default fallback
+
+# ==========================================
+# 3. STREAMLIT APPLICATION FLOW
+# ==========================================
+
+st.title("🔧 MechGPT")
+st.caption("Track 1: Automated ANSYS Workbench Troubleshooting Utility")
+st.write("---")
+
+# 1. API Secrets / Authentication Handling (Check environment first)
+api_key = os.getenv("OPENAI_API_KEY")
+if not api_key:
+    api_key = st.sidebar.text_input("Provide OpenAI API Key", type="password")
+
+# 2. File Uploader UI Component
+uploaded_file = st.file_uploader(
+    label="Upload ANSYS Workbench Error Screenshot (.png, .jpg, .jpeg)",
+    type=["png", "jpg", "jpeg"]
+)
+
+# 3. Execution Pipeline (Triggers only when file is uploaded)
+if uploaded_file:
+    # CRITICAL FIX: Block execution here if the user hasn't provided a key yet
+    if not api_key:
+        st.error("🔑 Please supply your OpenAI API Key via the sidebar to activate the solver engine.")
+        st.stop()
+        
+    # Safely initialize the client now that we guarantee api_key exists
+    openai_client = openai.OpenAI(api_key=api_key)
+
+    # Load and display image asset
+    original_img = Image.open(uploaded_file)
+    st.image(original_img, caption="Target Error Image Asset", use_container_width=True)
+    
+    # Text Extraction Execution Pipeline
+    with st.spinner("Executing OCR engine analysis..."):
+        preprocessed_matrix = preprocess_image(original_img)
+        extracted_raw_text = extract_text_from_image(preprocessed_matrix)
+        
+    if not extracted_raw_text:
+        st.error("OCR execution did not parse any decipherable string characters.")
+        st.stop()
+        
+    with st.expander("Inspected Raw Parsed Text"):
+        st.text_area("Engine View", value=extracted_raw_text, height=100, disabled=True)
+
+    # LLM Query Generation & Parsing
+    with st.spinner("Consulting MechGPT Solver Core..."):
+        structured_prompt = (
+            f"You are ANSYS expert. Error: {extracted_raw_text}. "
+            f"Explain cause in 2 lines + give 3 exact click-by-click fix steps for ANSYS Workbench. "
+            f"No theory."
+        )
+        
+        try:
+            api_payload = openai_client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {
+                        "role": "system", 
+                        "content": "You are a rigid engineering utility engine. You do not talk conversationally. Provide text answers formatted strictly to the requested constraints."
+                    },
+                    {"role": "user", "content": structured_prompt}
+                ],
+                temperature=0.0
+            )
+            llm_response = api_payload.choices[0].message.content
+            
+            # Final Output Render UI Stage
+            st.markdown("### 🛠️ Structural/Mechanical Remediation Execution Protocol")
+            st.info(llm_response)
+            
+            doc_url = get_documentation_link(extracted_raw_text)
+            st.markdown(f"🔗 **Reference Material Link:** [Access ANSYS Customer Portal Guide]({doc_url})")
+            
+        except Exception as error_instance:
+            st.error(f"OpenAI Core Engine communication breakdown: {error_instance}")
