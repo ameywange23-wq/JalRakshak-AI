@@ -178,5 +178,19 @@ if __name__ == "__main__":
     )
 
     print("Preprocessing Completed")
-
+    
     print(processed_df.head())
+
+# Input dataset 
+district,ph,tds,turbidity,do
+Wardha,7.1,250,2,6.5
+Nagpur,7.4,420,3,6.8
+Pune,8.6,900,10,4.2
+Nashik,6.8,380,4,6.1
+
+#output dataset 
+district,ph,tds,turbidity,do,risk,water_quality_index,tds_category
+Wardha,7.1,250,2,6.5,Safe,20.9,Low
+Nagpur,7.4,420,3,6.8,Moderate Risk,17.6,Medium
+Pune,8.6,900,10,4.2,High Risk,8.4,High
+Mumbai,7.2,1200,12,3.8
